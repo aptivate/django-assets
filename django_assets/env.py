@@ -4,11 +4,6 @@ from django.conf import settings
 from webassets.env import (
     BaseEnvironment, ConfigStorage, Resolver, url_prefix_join)
 from webassets.exceptions import ImminentDeprecationWarning
-try:
-    from django.contrib.staticfiles import finders
-except ImportError:
-    # Support pre-1.3 versions.
-    finders = None
 
 from django_assets.glob import Globber, has_magic
 
@@ -29,8 +24,6 @@ class DjangoConfigStorage(ConfigStorage):
         'manifest': 'ASSETS_MANIFEST',
         'load_path': 'ASSETS_LOAD_PATH',
         'url_mapping': 'ASSETS_URL_MAPPING',
-        # Deprecated
-        'expire': 'ASSETS_EXPIRE',
     }
 
     def _transform_key(self, key):
@@ -119,6 +112,13 @@ class DjangoResolver(Resolver):
         # The staticfiles finder system can't do globs, but we can
         # access the storages behind the finders, and glob those.
 
+        # We can't import too early because of unit tests
+        try:
+            from django.contrib.staticfiles import finders
+        except ImportError:
+            # Support pre-1.3 versions.
+            finders = None
+
         for finder in finders.get_finders():
             # Builtin finders use either one of those attributes,
             # though this does seem to be informal; custom finders
@@ -135,10 +135,17 @@ class DjangoResolver(Resolver):
                 for file in globber.glob(item):
                     yield storage.path(file)
 
-    def search_for_source(self, item):
+    def search_for_source(self, ctx, item):
         if not self.use_staticfiles:
-            return Resolver.search_for_source(self, item)
+            return Resolver.search_for_source(self, ctx, item)
 
+        # We can't import too early because of unit tests
+        try:
+            from django.contrib.staticfiles import finders
+        except ImportError:
+            # Support pre-1.3 versions.
+            finders = None
+    
         # Use the staticfiles finders to determine the absolute path
         if finders:
             if has_magic(item):
@@ -151,15 +158,15 @@ class DjangoResolver(Resolver):
         raise IOError(
             "'%s' not found (using staticfiles finders)" % item)
 
-    def resolve_source_to_url(self, filepath, item):
+    def resolve_source_to_url(self, ctx, filepath, item):
         if not self.use_staticfiles:
-            return Resolver.resolve_source_to_url(self, filepath, item)
+            return Resolver.resolve_source_to_url(self, ctx, filepath, item)
 
         # With staticfiles enabled, searching the url mappings, as the
         # parent implementation does, will not help. Instead, we can
         # assume that the url is the root url + the original relative
         # item that was specified (and searched for using the finders).
-        return url_prefix_join(self.env.url, item)
+        return url_prefix_join(ctx.url, item)
 
 
 class DjangoEnvironment(BaseEnvironment):
@@ -169,16 +176,6 @@ class DjangoEnvironment(BaseEnvironment):
 
     config_storage_class = DjangoConfigStorage
     resolver_class = DjangoResolver
-
-    def __init__(self, **config):
-        super(DjangoEnvironment, self).__init__(**config)
-
-        # This is pretty stupid, but fortunately will be removed with
-        # the deprecated option. This triggers the deprecation warnings.
-        if 'expire' in self.config:
-            self.config['expire'] = getattr(settings, 'ASSETS_EXPIRE')
-        if 'updater' in self.config:
-            self.config['updater'] = getattr(settings, 'ASSETS_UPDATER')
 
 
 # Django has a global state, a global configuration, and so we need a
